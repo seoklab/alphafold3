@@ -55,7 +55,9 @@ from jax import numpy as jnp
 import numpy as np
 
 
-_HOME_DIR = pathlib.Path(os.environ.get('HOME'))
+_HOME_DIR = pathlib.Path(
+    os.environ.get("ALPHAFOLD3_HOME", "/store/AlphaFold3")
+)
 DEFAULT_MODEL_DIR = _HOME_DIR / 'models'
 DEFAULT_DB_DIR = _HOME_DIR / 'public_databases'
 
@@ -154,12 +156,12 @@ _MGNIFY_DATABASE_PATH = flags.DEFINE_string(
 )
 _UNIPROT_CLUSTER_ANNOT_DATABASE_PATH = flags.DEFINE_string(
     'uniprot_cluster_annot_database_path',
-    '${DB_DIR}/uniprot_all_2021_04.fa',
+    '${DB_DIR}/uniprot_all.fa',
     'UniProt database path, used for protein paired MSA search.',
 )
 _UNIREF90_DATABASE_PATH = flags.DEFINE_string(
     'uniref90_database_path',
-    '${DB_DIR}/uniref90_2022_05.fa',
+    '${DB_DIR}/uniref90.fa',
     'UniRef90 database path, used for MSA search. The MSA obtained by '
     'searching it is used to construct the profile for template search.',
 )
@@ -180,12 +182,12 @@ _RNA_CENTRAL_DATABASE_PATH = flags.DEFINE_string(
 )
 _PDB_DATABASE_PATH = flags.DEFINE_string(
     'pdb_database_path',
-    '${DB_DIR}/pdb_2022_09_28_mmcif_files.tar',
+    '${DB_DIR}/pdb_mmcif_files',
     'PDB database directory with mmCIF files path, used for template search.',
 )
 _SEQRES_DATABASE_PATH = flags.DEFINE_string(
     'seqres_database_path',
-    '${DB_DIR}/pdb_seqres_2022_09_28.fasta',
+    '${DB_DIR}/pdb_seqres.fasta',
     'PDB sequence database path, used for template search.',
 )
 
