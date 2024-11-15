@@ -1,0 +1,27 @@
+name: af3
+channels:
+  - nvidia/label/cuda-12.6.0
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - cuda=12.6
+  - hmmer=3.4
+
+  - numpy=2.1
+  - scipy=1.14
+  - rdkit==2024.3.5
+
+  - absl-py=2.1
+  - dm-tree=0.1
+  - opt-einsum=3.4
+  - tqdm
+  - zstandard>=0.23
+
+  - pip
+  - pip:
+      - jax[cuda12_local]~=0.4,>=0.4.34
+      - jax-triton~=0.2,>=0.2.0
+      - chex~=0.1,>=0.1.87
+      - dm-haiku==0.0.13
+      - jaxtyping
