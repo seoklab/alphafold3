@@ -10,7 +10,6 @@
 
 """Functions for running the MSA and template tools for the AlphaFold model."""
 
-from concurrent import futures
 import dataclasses
 import datetime
 import functools
@@ -39,37 +38,28 @@ def _get_protein_msa_and_templates(
   """Processes a single protein chain."""
   logging.info('Getting protein MSAs for sequence %s', sequence)
   msa_start_time = time.time()
-  # Run various MSA tools in parallel. Use a ThreadPoolExecutor because
-  # they're not blocked by the GIL, as they're sub-shelled out.
-  with futures.ThreadPoolExecutor(max_workers=4) as executor:
-    uniref90_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=uniref90_msa_config,
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-    )
-    mgnify_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=mgnify_msa_config,
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-    )
-    small_bfd_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=small_bfd_msa_config,
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-    )
-    uniprot_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=uniprot_msa_config,
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-    )
-  uniref90_msa = uniref90_msa_future.result()
-  mgnify_msa = mgnify_msa_future.result()
-  small_bfd_msa = small_bfd_msa_future.result()
-  uniprot_msa = uniprot_msa_future.result()
+
+  uniref90_msa = msa.get_msa(
+      target_sequence=sequence,
+      run_config=uniref90_msa_config,
+      chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+  )
+  mgnify_msa = msa.get_msa(
+      target_sequence=sequence,
+      run_config=mgnify_msa_config,
+      chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+  )
+  small_bfd_msa = msa.get_msa(
+      target_sequence=sequence,
+      run_config=small_bfd_msa_config,
+      chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+  )
+  uniprot_msa = msa.get_msa(
+      target_sequence=sequence,
+      run_config=uniprot_msa_config,
+      chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+  )
+
   logging.info(
       'Getting protein MSAs took %.2f seconds for sequence %s',
       time.time() - msa_start_time,
@@ -81,30 +71,26 @@ def _get_protein_msa_and_templates(
       sequence,
   )
   templates_start_time = time.time()
-  with futures.ThreadPoolExecutor() as executor:
-    unpaired_protein_msa_future = executor.submit(
-        msa.Msa.from_multiple_msas,
-        msas=[uniref90_msa, small_bfd_msa, mgnify_msa],
-        deduplicate=True,
-    )
-    paired_protein_msa_future = executor.submit(
-        msa.Msa.from_multiple_msas, msas=[uniprot_msa], deduplicate=False
-    )
-    filter_config = templates_config.filter_config
-    templates_future = executor.submit(
-        templates.Templates.from_seq_and_a3m,
-        query_sequence=sequence,
-        msa_a3m=uniref90_msa.to_a3m(),
-        max_template_date=filter_config.max_template_date,
-        database_path=templates_config.template_tool_config.database_path,
-        hmmsearch_config=templates_config.template_tool_config.hmmsearch_config,
-        max_a3m_query_sequences=None,
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-        structure_store=structure_stores.StructureStore(pdb_database_path),
-    )
-  unpaired_protein_msa = unpaired_protein_msa_future.result()
-  paired_protein_msa = paired_protein_msa_future.result()
-  protein_templates = templates_future.result()
+
+  unpaired_protein_msa = msa.Msa.from_multiple_msas(
+      msas=[uniref90_msa, small_bfd_msa, mgnify_msa],
+      deduplicate=True,
+  )
+  paired_protein_msa = msa.Msa.from_multiple_msas(
+      msas=[uniprot_msa], deduplicate=False
+  )
+
+  filter_config = templates_config.filter_config
+  protein_templates = templates.Templates.from_seq_and_a3m(
+      query_sequence=sequence,
+      msa_a3m=uniref90_msa.to_a3m(),
+      max_template_date=filter_config.max_template_date,
+      database_path=templates_config.template_tool_config.database_path,
+      hmmsearch_config=templates_config.template_tool_config.hmmsearch_config,
+      max_a3m_query_sequences=None,
+      chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+      structure_store=structure_stores.StructureStore(pdb_database_path),
+  )
   logging.info(
       'Deduplicating MSAs and getting protein templates took %.2f seconds for'
       ' sequence %s',
@@ -140,30 +126,23 @@ def _get_rna_msa(
   """Processes a single RNA chain."""
   logging.info('Getting RNA MSAs for sequence %s', sequence)
   rna_msa_start_time = time.time()
-  # Run various MSA tools in parallel. Use a ThreadPoolExecutor because
-  # they're not blocked by the GIL, as they're sub-shelled out.
-  with futures.ThreadPoolExecutor() as executor:
-    nt_rna_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=nt_rna_msa_config,
-        chain_poly_type=mmcif_names.RNA_CHAIN,
-    )
-    rfam_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=rfam_msa_config,
-        chain_poly_type=mmcif_names.RNA_CHAIN,
-    )
-    rnacentral_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=rnacentral_msa_config,
-        chain_poly_type=mmcif_names.RNA_CHAIN,
-    )
-  nt_rna_msa = nt_rna_msa_future.result()
-  rfam_msa = rfam_msa_future.result()
-  rnacentral_msa = rnacentral_msa_future.result()
+
+  nt_rna_msa = msa.get_msa(
+      target_sequence=sequence,
+      run_config=nt_rna_msa_config,
+      chain_poly_type=mmcif_names.RNA_CHAIN,
+  )
+  rfam_msa = msa.get_msa(
+      target_sequence=sequence,
+      run_config=rfam_msa_config,
+      chain_poly_type=mmcif_names.RNA_CHAIN,
+  )
+  rnacentral_msa = msa.get_msa(
+      target_sequence=sequence,
+      run_config=rnacentral_msa_config,
+      chain_poly_type=mmcif_names.RNA_CHAIN,
+  )
+
   logging.info(
       'Getting RNA MSAs took %.2f seconds for sequence %s',
       time.time() - rna_msa_start_time,
