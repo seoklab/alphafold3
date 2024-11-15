@@ -9,3 +9,11 @@
 # https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md
 
 """An implementation of the inference pipeline of AlphaFold 3."""
+
+import os
+
+os.environ["XLA_FLAGS"] = f"--xla_cpu_multi_thread_eigen=true \
+--xla_gpu_enable_triton_gemm=false \
+{os.environ.get('XLA_FLAGS', '')}"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_CLIENT_MEM_FRACTION"] = "0.95"

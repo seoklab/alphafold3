@@ -669,8 +669,12 @@ def main(_):
   print(f'Done processing {len(fold_inputs)} fold inputs.')
 
 
-if __name__ == '__main__':
+def script_main():
   flags.mark_flags_as_required([
       'output_dir',
   ])
   app.run(main)
+
+
+if __name__ == '__main__':
+    script_main()

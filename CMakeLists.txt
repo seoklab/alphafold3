@@ -92,4 +92,5 @@ install(
         OUTPUT_TERMS_OF_USE.md
         WEIGHTS_PROHIBITED_USE_POLICY.md
         WEIGHTS_TERMS_OF_USE.md
+        run_alphafold.py
   DESTINATION alphafold3)
