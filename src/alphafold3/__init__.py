@@ -10,10 +10,35 @@
 
 """An implementation of the inference pipeline of AlphaFold 3."""
 
+import io
 import os
+import subprocess as sp
 
-os.environ["XLA_FLAGS"] = f"--xla_cpu_multi_thread_eigen=true \
---xla_gpu_enable_triton_gemm=false \
-{os.environ.get('XLA_FLAGS', '')}"
+import pandas as pd
+
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["XLA_CLIENT_MEM_FRACTION"] = "0.95"
+
+
+def _resolve_xla_flags():
+  flags = "--xla_cpu_multi_thread_eigen=true --xla_gpu_enable_triton_gemm=false"
+  if extra_flags := os.environ.get("XLA_FLAGS"):
+    flags += f" {extra_flags}"
+
+  try:
+    out = sp.run(
+      ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv"],
+      check=True,
+      stdout=sp.PIPE,
+      text=True,
+    )
+    cap = pd.read_csv(io.StringIO(out.stdout))["compute_cap"].min()
+    if cap < 8.0:
+      flags += " --xla_disable_hlo_passes=custom-kernel-fusion-rewriter"
+  except FileNotFoundError:
+    pass
+
+  os.environ["XLA_FLAGS"] = flags
+
+
+_resolve_xla_flags()
