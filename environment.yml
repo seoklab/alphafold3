@@ -17,6 +17,10 @@ dependencies:
   - opt-einsum=3.4
   - tqdm
   - zstandard>=0.23
+  - jaxtyping=0.2
+
+  # build requirement
+  - zlib
 
   - pip
   - pip:
@@ -24,4 +28,3 @@ dependencies:
       - jax-triton~=0.2,>=0.2.0
       - chex~=0.1,>=0.1.87
       - dm-haiku==0.0.13
-      - jaxtyping
