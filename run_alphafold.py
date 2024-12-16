@@ -22,6 +22,7 @@ https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md
 from collections.abc import Callable, Iterable, Sequence
 import csv
 import dataclasses
+import datetime
 import functools
 import multiprocessing
 import os
@@ -58,8 +59,8 @@ import numpy as np
 _HOME_DIR = pathlib.Path(
     os.environ.get("ALPHAFOLD3_HOME", "/store/AlphaFold3")
 )
-DEFAULT_MODEL_DIR = _HOME_DIR / 'models'
-DEFAULT_DB_DIR = _HOME_DIR / 'public_databases'
+_DEFAULT_MODEL_DIR = _HOME_DIR / 'models'
+_DEFAULT_DB_DIR = _HOME_DIR / 'public_databases'
 
 
 # Input and output paths.
@@ -78,25 +79,10 @@ _OUTPUT_DIR = flags.DEFINE_string(
     None,
     'Path to a directory where the results will be saved.',
 )
-
-_MODEL_DIR = flags.DEFINE_string(
+MODEL_DIR = flags.DEFINE_string(
     'model_dir',
-    DEFAULT_MODEL_DIR.as_posix(),
+    _DEFAULT_MODEL_DIR.as_posix(),
     'Path to the model to use for inference.',
-)
-
-_FLASH_ATTENTION_IMPLEMENTATION = flags.DEFINE_enum(
-    'flash_attention_implementation',
-    default='triton',
-    enum_values=['triton', 'cudnn', 'xla'],
-    help=(
-        "Flash attention implementation to use. 'triton' and 'cudnn' uses a"
-        ' Triton and cuDNN flash attention implementation, respectively. The'
-        ' Triton kernel is fastest and has been tested more thoroughly. The'
-        " Triton and cuDNN kernels require Ampere GPUs or later. 'xla' uses an"
-        ' XLA attention implementation (no flash attention) and is portable'
-        ' across GPU devices.'
-    ),
 )
 
 # Control which stages to run.
@@ -139,11 +125,13 @@ _HMMBUILD_BINARY_PATH = flags.DEFINE_string(
 )
 
 # Database paths.
-_DB_DIR = flags.DEFINE_string(
+DB_DIR = flags.DEFINE_multi_string(
     'db_dir',
-    DEFAULT_DB_DIR.as_posix(),
-    'Path to the directory containing the databases.',
+    (_DEFAULT_DB_DIR.as_posix(),),
+    'Path to the directory containing the databases. Can be specified multiple'
+    ' times to search multiple directories in order.',
 )
+
 _SMALL_BFD_DATABASE_PATH = flags.DEFINE_string(
     'small_bfd_database_path',
     '${DB_DIR}/bfd-first_non_consensus_sequences.fasta',
@@ -182,7 +170,7 @@ _RNA_CENTRAL_DATABASE_PATH = flags.DEFINE_string(
 )
 _PDB_DATABASE_PATH = flags.DEFINE_string(
     'pdb_database_path',
-    '${DB_DIR}/pdb_mmcif_files',
+    '${DB_DIR}/mmcif_files',
     'PDB database directory with mmCIF files path, used for template search.',
 )
 _SEQRES_DATABASE_PATH = flags.DEFINE_string(
@@ -205,14 +193,20 @@ _NHMMER_N_CPU = flags.DEFINE_integer(
     ' beyond 8 CPUs provides very little additional speedup.',
 )
 
-# Compilation cache.
+# Template search configuration.
+_MAX_TEMPLATE_DATE = flags.DEFINE_string(
+    'max_template_date',
+    '2021-09-30',  # By default, use the date from the AlphaFold 3 paper.
+    'Maximum template release date to consider. Format: YYYY-MM-DD. All '
+    'templates released after this date will be ignored.',
+)
+
+# JAX inference performance tuning.
 _JAX_COMPILATION_CACHE_DIR = flags.DEFINE_string(
     'jax_compilation_cache_dir',
     None,
     'Path to a directory for the JAX compilation cache.',
 )
-
-# Compilation buckets.
 _BUCKETS = flags.DEFINE_list(
     'buckets',
     # pyformat: disable
@@ -222,6 +216,24 @@ _BUCKETS = flags.DEFINE_list(
     'Strictly increasing order of token sizes for which to cache compilations.'
     ' For any input with more tokens than the largest bucket size, a new bucket'
     ' is created for exactly that number of tokens.',
+)
+_FLASH_ATTENTION_IMPLEMENTATION = flags.DEFINE_enum(
+    'flash_attention_implementation',
+    default='triton',
+    enum_values=['triton', 'cudnn', 'xla'],
+    help=(
+        "Flash attention implementation to use. 'triton' and 'cudnn' uses a"
+        ' Triton and cuDNN flash attention implementation, respectively. The'
+        ' Triton kernel is fastest and has been tested more thoroughly. The'
+        " Triton and cuDNN kernels require Ampere GPUs or later. 'xla' uses an"
+        ' XLA attention implementation (no flash attention) and is portable'
+        ' across GPU devices.'
+    ),
+)
+_NUM_DIFFUSION_SAMPLES = flags.DEFINE_integer(
+    'num_diffusion_samples',
+    5,
+    'Number of diffusion samples to generate.',
 )
 
 
@@ -251,12 +263,16 @@ def make_model_config(
     *,
     model_class: type[ModelT] = diffusion_model.Diffuser,
     flash_attention_implementation: attention.Implementation = 'triton',
+    num_diffusion_samples: int = 5,
 ):
+  """Returns a model config with some defaults overridden."""
   config = model_class.Config()
   if hasattr(config, 'global_config'):
     config.global_config.flash_attention_implementation = (
         flash_attention_implementation
     )
+  if hasattr(config, 'heads'):
+    config.heads.diffusion.eval.num_samples = num_diffusion_samples
   return config
 
 
@@ -482,6 +498,22 @@ def process_fold_input(
   ...
 
 
+def replace_db_dir(path_with_db_dir: str, db_dirs: Sequence[str]) -> str:
+  """Replaces the DB_DIR placeholder in a path with the given DB_DIR."""
+  template = string.Template(path_with_db_dir)
+  if 'DB_DIR' in template.get_identifiers():
+    for db_dir in db_dirs:
+      path = template.substitute(DB_DIR=db_dir)
+      if os.path.exists(path):
+        return path
+    raise FileNotFoundError(
+        f'{path_with_db_dir} with ${{DB_DIR}} not found in any of {db_dirs}.'
+    )
+  if not os.path.exists(path_with_db_dir):
+    raise FileNotFoundError(f'{path_with_db_dir} does not exist.')
+  return path_with_db_dir
+
+
 def process_fold_input(
     fold_input: folding_input.Input,
     data_pipeline_config: pipeline.DataPipelineConfig | None,
@@ -513,6 +545,16 @@ def process_fold_input(
 
   if not fold_input.chains:
     raise ValueError('Fold input has no chains.')
+
+  if os.path.exists(output_dir) and os.listdir(output_dir):
+    new_output_dir = (
+        f'{output_dir}_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}'
+    )
+    print(
+        f'Output directory {output_dir} exists and non-empty, using instead '
+        f' {new_output_dir}.'
+    )
+    output_dir = new_output_dir
 
   if model_runner is not None:
     # If we're running inference, check we can load the model parameters before
@@ -594,6 +636,26 @@ def main(_):
     print(f'Failed to create output directory {_OUTPUT_DIR.value}: {e}')
     raise
 
+  if _RUN_INFERENCE.value:
+    # Fail early on incompatible devices, but only if we're running inference.
+    gpu_devices = jax.local_devices(backend='gpu')
+    if gpu_devices:
+      compute_capability = float(gpu_devices[0].compute_capability)
+      if compute_capability < 6.0:
+        raise ValueError(
+            'AlphaFold 3 requires at least GPU compute capability 6.0 (see'
+            ' https://developer.nvidia.com/cuda-gpus).'
+        )
+      elif 7.0 <= compute_capability < 8.0:
+        xla_flags = os.environ.get('XLA_FLAGS')
+        required_flag = '--xla_disable_hlo_passes=custom-kernel-fusion-rewriter'
+        if not xla_flags or required_flag not in xla_flags:
+          raise ValueError(
+              'For devices with GPU compute capability 7.x (see'
+              ' https://developer.nvidia.com/cuda-gpus) the ENV XLA_FLAGS must'
+              f' include "{required_flag}".'
+          )
+
   notice = textwrap.wrap(
       'Running AlphaFold 3. Please note that standard AlphaFold 3 model'
       ' parameters are only available under terms of use provided at'
@@ -608,30 +670,28 @@ def main(_):
   print('\n'.join(notice))
 
   if _RUN_DATA_PIPELINE.value:
-    replace_db_dir = lambda x: string.Template(x).substitute(
-        DB_DIR=_DB_DIR.value
-    )
+    expand_path = lambda x: replace_db_dir(x, DB_DIR.value)
+    max_template_date = datetime.date.fromisoformat(_MAX_TEMPLATE_DATE.value)
     data_pipeline_config = pipeline.DataPipelineConfig(
         jackhmmer_binary_path=_JACKHMMER_BINARY_PATH.value,
         nhmmer_binary_path=_NHMMER_BINARY_PATH.value,
         hmmalign_binary_path=_HMMALIGN_BINARY_PATH.value,
         hmmsearch_binary_path=_HMMSEARCH_BINARY_PATH.value,
         hmmbuild_binary_path=_HMMBUILD_BINARY_PATH.value,
-        small_bfd_database_path=replace_db_dir(_SMALL_BFD_DATABASE_PATH.value),
-        mgnify_database_path=replace_db_dir(_MGNIFY_DATABASE_PATH.value),
-        uniprot_cluster_annot_database_path=replace_db_dir(
+        small_bfd_database_path=expand_path(_SMALL_BFD_DATABASE_PATH.value),
+        mgnify_database_path=expand_path(_MGNIFY_DATABASE_PATH.value),
+        uniprot_cluster_annot_database_path=expand_path(
             _UNIPROT_CLUSTER_ANNOT_DATABASE_PATH.value
         ),
-        uniref90_database_path=replace_db_dir(_UNIREF90_DATABASE_PATH.value),
-        ntrna_database_path=replace_db_dir(_NTRNA_DATABASE_PATH.value),
-        rfam_database_path=replace_db_dir(_RFAM_DATABASE_PATH.value),
-        rna_central_database_path=replace_db_dir(
-            _RNA_CENTRAL_DATABASE_PATH.value
-        ),
-        pdb_database_path=replace_db_dir(_PDB_DATABASE_PATH.value),
-        seqres_database_path=replace_db_dir(_SEQRES_DATABASE_PATH.value),
+        uniref90_database_path=expand_path(_UNIREF90_DATABASE_PATH.value),
+        ntrna_database_path=expand_path(_NTRNA_DATABASE_PATH.value),
+        rfam_database_path=expand_path(_RFAM_DATABASE_PATH.value),
+        rna_central_database_path=expand_path(_RNA_CENTRAL_DATABASE_PATH.value),
+        pdb_database_path=expand_path(_PDB_DATABASE_PATH.value),
+        seqres_database_path=expand_path(_SEQRES_DATABASE_PATH.value),
         jackhmmer_n_cpu=_JACKHMMER_N_CPU.value,
         nhmmer_n_cpu=_NHMMER_N_CPU.value,
+        max_template_date=max_template_date,
     )
   else:
     print('Skipping running the data pipeline.')
@@ -647,17 +707,20 @@ def main(_):
         config=make_model_config(
             flash_attention_implementation=typing.cast(
                 attention.Implementation, _FLASH_ATTENTION_IMPLEMENTATION.value
-            )
+            ),
+            num_diffusion_samples=_NUM_DIFFUSION_SAMPLES.value,
         ),
         device=devices[0],
-        model_dir=pathlib.Path(_MODEL_DIR.value),
+        model_dir=pathlib.Path(MODEL_DIR.value),
     )
   else:
     print('Skipping running model inference.')
     model_runner = None
 
-  print(f'Processing {len(fold_inputs)} fold inputs.')
+  print('Processing fold inputs.')
+  num_fold_inputs = 0
   for fold_input in fold_inputs:
+    print(f'Processing fold input #{num_fold_inputs + 1}')
     process_fold_input(
         fold_input=fold_input,
         data_pipeline_config=data_pipeline_config,
@@ -665,8 +728,9 @@ def main(_):
         output_dir=os.path.join(_OUTPUT_DIR.value, fold_input.sanitised_name()),
         buckets=tuple(int(bucket) for bucket in _BUCKETS.value),
     )
+    num_fold_inputs += 1
 
-  print(f'Done processing {len(fold_inputs)} fold inputs.')
+  print(f'Done processing {num_fold_inputs} fold inputs.')
 
 
 def script_main():
