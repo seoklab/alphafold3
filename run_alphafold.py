@@ -235,6 +235,11 @@ _NUM_DIFFUSION_SAMPLES = flags.DEFINE_integer(
     5,
     'Number of diffusion samples to generate.',
 )
+_OVERWRITE = flags.DEFINE_boolean(
+    'allow_overwrite',
+    False,
+    'Whether to allow overwriting existing output directories.',
+)
 
 
 class ConfigurableModel(Protocol):
@@ -546,7 +551,11 @@ def process_fold_input(
   if not fold_input.chains:
     raise ValueError('Fold input has no chains.')
 
-  if os.path.exists(output_dir) and os.listdir(output_dir):
+  if (
+    not _OVERWRITE.value
+    and os.path.exists(output_dir)
+    and os.listdir(output_dir)
+  ):
     new_output_dir = (
         f'{output_dir}_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}'
     )
