@@ -43,6 +43,7 @@ wheel.exclude = [
     "**.h"
 ]
 sdist.include = [
+    "src/alphafold3/_version.py",
     "LICENSE",
     "OUTPUT_TERMS_OF_USE.md",
     "WEIGHTS_PROHIBITED_USE_POLICY.md",
@@ -50,7 +51,7 @@ sdist.include = [
 ]
 
 [tool.setuptools_scm]
-write_to = "src/alphafold3/version.py"
+write_to = "src/alphafold3/_version.py"
 
 [tool.cibuildwheel]
 build = "cp3*-manylinux_x86_64"
