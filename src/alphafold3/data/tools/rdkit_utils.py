@@ -128,7 +128,7 @@ def _populate_bonds_in_mol(
     mol.GetBondWithIdx(bond_idx - 1).SetIsAromatic(is_aromatic)
 
 
-def _sanitize_mol(mol, sort_alphabetically, remove_hydrogens) -> rd_chem.Mol:
+def sanitize_mol(mol, sort_alphabetically, remove_hydrogens) -> rd_chem.Mol:
   # https://www.rdkit.org/docs/source/rdkit.Chem.rdmolops.html#rdkit.Chem.rdmolops.SanitizeMol
   # Kekulize, check valencies, set aromaticity, conjugation and hybridization.
   # This can repair e.g. incorrect aromatic flags.
@@ -231,7 +231,7 @@ def mol_from_ccd_cif(
 
   try:
     _add_conformer_to_mol(mol, conformer, force_parse)
-    mol = _sanitize_mol(mol, sort_alphabetically, remove_hydrogens)
+    mol = sanitize_mol(mol, sort_alphabetically, remove_hydrogens)
   except (
       ValueError,
       rd_chem.KekulizeException,
@@ -525,11 +525,14 @@ def assign_atom_names_from_graph(
 def get_random_conformer(
     mol: rd_chem.Mol,
     random_seed: int,
+    max_iterations: int | None,
     logging_name: str,
 ) -> rd_chem.Conformer | None:
   """Stochastic conformer search method using V3 ETK."""
   params = rd_all_chem.ETKDGv3()
   params.randomSeed = random_seed
+  if max_iterations is not None:  # Override default value.
+    params.maxIterations = max_iterations
   mol_copy = rd_chem.Mol(mol)
   try:
     conformer_id = rd_all_chem.EmbedMolecule(mol_copy, params)

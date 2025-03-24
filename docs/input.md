@@ -113,10 +113,11 @@ The top-level structure of the input JSON is:
     {"dna": {...}},
     {"ligand": {...}}
   ],
-  "bondedAtomPairs": [...],  # Optional
-  "userCCD": "...",  # Optional
-  "dialect": "alphafold3",  # Required
-  "version": 2  # Required
+  "bondedAtomPairs": [...],  # Optional.
+  "userCCD": "...",  # Optional, mutually exclusive with userCCDPath.
+  "userCCDPath": "...",  # Optional, mutually exclusive with userCCD.
+  "dialect": "alphafold3",  # Required.
+  "version": 3  # Required.
 }
 ```
 
@@ -140,6 +141,12 @@ The fields specify the following:
     in such cases since it doesn't give the possibility of uniquely naming all
     atoms. It can also be used to provide a reference conformer for cases where
     RDKit fails to generate a conformer. See more below.
+*   `userCCDPath: str`: An optional path to a file that contains the
+    user-provided chemical components dictionary instead of providing it inline
+    using the `userCCD` field. The path can be either absolute, or relative to
+    the input JSON path. The file must be in the
+    [CCD mmCIF format](https://www.wwpdb.org/data/ccd#mmcifFormat), and could be
+    either plain text, or compressed using gzip, xz, or zstd.
 *   `dialect: str`: The dialect of the input JSON. This must be set to
     `alphafold3`. See
     [AlphaFold Server JSON Compatibility](#alphafold-server-json-compatibility)
@@ -151,12 +158,14 @@ The fields specify the following:
 
 ## Versions
 
-The top-level `version` field (for the `alphafold3` dialect) can be either `1`
-or `2`. The following features have been added in respective versions:
+The top-level `version` field (for the `alphafold3` dialect) can be either `1`,
+`2`, or `3`. The following features have been added in respective versions:
 
 *   `1`: the initial AlphaFold 3 input format.
 *   `2`: added the option of specifying external MSA and templates using newly
     added fields `unpairedMsaPath`, `pairedMsaPath`, and `mmcifPath`.
+*   `3`: added the option of specifying external user-provided CCD using newly
+    added field `userCCDPath`.
 
 ## Sequences
 
@@ -332,9 +341,52 @@ The fields specify the following:
     standard CCD codes, or custom codes pointing to the
     [user-provided CCD](#user-provided-ccd).
 *   `smiles: str`: An optional string defining the ligand using a SMILES string.
+    The SMILES string must be correctly JSON-escaped.
 
 Each ligand may be specified using CCD codes or SMILES but not both, i.e. for a
 given ligand, the `ccdCodes` and `smiles` fields are mutually exclusive.
+
+#### SMILES string JSON escaping
+
+The SMILES string must be correctly JSON-escaped, in particular the backslash
+character must be escaped as two backslashes, otherwise the JSON parser will
+fail with a `JSONDecodeError`. For instance, the following SMILES string
+`CCC[C@@H](O)CC\C=C\C=C\C#CC#C\C=C\CO` has to be specified as:
+
+```json
+{
+  "ligand": {
+    "id": "A",
+    "smiles": "CCC[C@@H](O)CC\\C=C\\C=C\\C#CC#C\\C=C\\CO"
+  }
+}
+```
+
+You can JSON-escape the SMILES string using the
+[`jq`](https://github.com/jqlang/jq) command-line tool which should be easily
+installable on most Linux systems:
+
+```bash
+jq -R . <<< 'CCC[C@@H](O)CC\C=C\C=C\C#CC#C\C=C\CO'  # Replace with your SMILES.
+```
+
+Alternatively, you can use this Python code:
+
+```python
+import json
+
+smiles = r'CCC[C@@H](O)CC\C=C\C=C\C#CC#C\C=C\CO'  # Replace with your SMILES.
+print(json.dumps(smiles))
+```
+
+#### Reference structure construction with SMILES
+
+For some ligands and some random seeds, RDKit might fail to generate a
+conformer, indicated by the `Failed to construct RDKit reference structure`
+error message. In this case, you can either provide a reference structure for
+the ligand using the [user-provided CCD Format](#user-provided-ccd-format), or
+try increasing the number of RDKit conformer iterations using the
+`--conformer_max_iterations=...` flag.
 
 ### Ions
 
@@ -383,8 +435,8 @@ The following combinations are valid for a given protein chain:
     string, AlphaFold 3 will use the provided MSA instead of building one as
     part of the data pipeline. This is considered an expert option.
 
-Note that both `unpairedMsa` and `unpairedMsa` have to either be *both* set
-(i.e. non-`null`), or both unset (i.e. both `null`, explicitly or implicitly).
+Note that both `unpairedMsa` and `pairedMsa` have to either be *both* set (i.e.
+non-`null`), or both unset (i.e. both `null`, explicitly or implicitly).
 Typically, when setting `unpairedMsa`, you will set the `pairedMsa` to an empty
 string (`""`). For example this will run the protein chain A with the given MSA,
 but without any templates (template-free):
@@ -437,7 +489,7 @@ an empty string (`""`).
 For instance, if there are two chains `DEEP` and `MIND` which we want to be
 paired on organism A and C, we can achieve it as follows:
 
-```text
+```txt
 > query
 DEEP
 > match 1 (organism A)
@@ -448,7 +500,7 @@ DD-P
 DD-P
 ```
 
-```text
+```txt
 > query
 MIND
 > match 1 (organism A)
@@ -461,7 +513,7 @@ MIN-
 
 The resulting MSA when chains are concatenated will then be:
 
-```text
+```txt
 > query
 DEEPMIND
 > match 1 + match 1
@@ -494,7 +546,7 @@ The fields specify the following:
 *   `mmcifPath: str`: An optional path to a file that contains the mmCIF with
     the structural template instead of providing it inline using the `mmcifPath`
     field. The path can be either absolute, or relative to the input JSON path.
-    The file must be in the A3M format, and could be either plain text, or
+    The file must be in the mmCIF format, and could be either plain text, or
     compressed using gzip, xz, or zstd.
 *   `queryIndices: list[int]`: O-based indices in the query sequence, defining
     the mapping from query residues to template residues.
@@ -634,11 +686,18 @@ You will need to specify:
 
 ## User-provided CCD
 
-There are two approaches to model a custom ligand not defined in the CCD. If the
-ligand is not bonded to other entities, it can be defined using a
-[SMILES string](https://en.wikipedia.org/wiki/Simplified_Molecular_Input_Line_Entry_System).
-Otherwise, it is necessary to define that particular ligand using the
-[CCD mmCIF format](https://www.wwpdb.org/data/ccd#mmcifFormat).
+There are two approaches to model a custom ligand not defined in the CCD:
+
+1.  If the ligand is not bonded to other entities, it can be defined using a
+    [SMILES string](https://en.wikipedia.org/wiki/Simplified_Molecular_Input_Line_Entry_System).
+2.  If it is bonded to other entities, or to be able to customise relevant
+    features (such as bond orders, atom names and ideal coordinates used when
+    conformer generation fails), it is necessary to define that particular
+    ligand using the
+    [CCD mmCIF format](https://www.wwpdb.org/data/ccd#mmcifFormat).
+
+Note that if a full CCD mmCIF is provided, any SMILES string input as part of
+that mmCIF is ignored.
 
 Once defined, this ligand needs to be assigned a name that doesn't clash with
 existing CCD ligand names (e.g. `LIG-1`). Avoid underscores (`_`) in the name,
@@ -647,22 +706,47 @@ as it could cause issues in the mmCIF format.
 The newly defined ligand can then be used as a standard CCD ligand using its
 custom name, and bonds can be linked to it using its named atom scheme.
 
+### Conformer Generation
+
+The data pipeline attempts to generate a conformer for ligands using RDKit. The
+`Mol` used to generate the conformer is constructed either from the information
+provided in the CCD mmCIF, or from the SMILES string if that is the only
+information provided.
+
+If conformer generation fails, the model will fall back to using the ideal
+coordinates in the CCD mmCIF if these are provided. If they are not provided,
+the model will use the reference coordinates if the last modification date given
+in the CCD mmCIF is prior to the training cutoff date. If no coordinates can be
+found in this way, all conformer coordinates are set to zero and the model will
+output `NaN` (`null` in the output JSON) confidences for the ligand.
+
+Note that sometimes conformer generation failures can be resolved by
+increasinging the number of RDKit conformer iterations using the
+`--conformer_max_iterations=...` flag.
+
 ### User-provided CCD Format
 
-The user-provided CCD must be passed in the `userCCD` field (in the root of the
-input JSON) as a string. Note that JSON doesn't allow newlines within strings,
-so newline characters (`\n`) must be used to delimit lines. Single rather than
-double quotes should also be used around strings like the chemical formula.
+The user-provided CCD must be passed either:
+
+*   In the `userCCD` field (in the root of the input JSON) as a string. Note
+    that JSON doesn't allow newlines within strings, so newline characters
+    (`\n`) must be used to delimit lines. Single rather than double quotes
+    should also be used around strings like the chemical formula.
+*   In the `userCCDPath` field, as a path to a file that contains the
+    user-provided chemical components dictionary. The path can be either
+    absolute, or relative to the input JSON path. The file must be in the
+    [CCD mmCIF format](https://www.wwpdb.org/data/ccd#mmcifFormat), and could be
+    either plain text, or compressed using gzip, xz, or zstd.
 
 The main pieces of information used are the atom names and elements, bonds, and
 also the ideal coordinates (`pdbx_model_Cartn_{x,y,z}_ideal`) which essentially
 serve as a structural template for the ligand if RDKit fails to generate
 conformers for that ligand.
 
-The `userCCD` can also be used to redefine standard chemical components in the
-CCD. This can be useful if you need to redefine the ideal coordinates.
+The user-provided CCD can also be used to redefine standard chemical components
+in the CCD. This can be useful if you need to redefine the ideal coordinates.
 
-Below is an example `userCCD` redefining component X7F, which serves to
+Below is an example user-provided CCD redefining component X7F, which serves to
 illustrate the required sections. For readability purposes, newlines have not
 been replaced by `\n`.
 
@@ -738,10 +822,12 @@ O13 H6 SING N
 
 ### Mandatory fields
 
-AlphaFold 3 needs only a subset of the fields that CCD uses. The mandatory
-fields are described below. Refer to
+Parsing the user-provided CCD needs only a subset of the fields that CCD uses.
+The mandatory fields are described below. Refer to
 [CCD documentation](https://www.wwpdb.org/data/ccd#mmcifFormat) for more
-detailed explanation of each field.
+detailed explanation of each field. Note that not all of these fields are input
+to the model, but they are necessary for the data pipeline to run – see the
+[Model input fields](#model-input-fields) section below.
 
 **Singular fields (containing just a single value)**
 
@@ -763,8 +849,8 @@ detailed explanation of each field.
 *   `_chem_comp_atom.atom_id`: Atom ID.
 *   `_chem_comp_atom.type_symbol`: Atom element type.
 *   `_chem_comp_atom.charge`: Atom charge.
-*   `_chem_comp_atom.pdbx_leaving_atom_flag`: Flag determining whether this is a
-    leaving atom.
+*   `_chem_comp_atom.pdbx_leaving_atom_flag`: Optional flag determining whether
+    this is a leaving atom. If unset, assumed to be no (`N`) for all atoms.
 *   `_chem_comp_atom.pdbx_model_Cartn_x_ideal`: Ideal x coordinate.
 *   `_chem_comp_atom.pdbx_model_Cartn_y_ideal`: Ideal y coordinate.
 *   `_chem_comp_atom.pdbx_model_Cartn_z_ideal`: Ideal z coordinate.
@@ -778,6 +864,24 @@ detailed explanation of each field.
 *   `_chem_comp_bond.value_order`: The bond order of the chemical bond
     associated with the specified atoms.
 *   `_chem_comp_bond.pdbx_aromatic_flag`: Whether the bond is aromatic.
+
+### Model input fields
+
+The following fields are used to generate input for the model:
+
+*   `_chem_comp_atom.atom_id`: Atom ID.
+*   `_chem_comp_atom.type_symbol`: Atom element type.
+*   `_chem_comp_atom.charge`: Atom charge.
+*   `_chem_comp_atom.pdbx_model_Cartn_x_ideal`: Ideal x coordinate. Only used if
+    conformer generation fails.
+*   `_chem_comp_atom.pdbx_model_Cartn_y_ideal`: Ideal y coordinate. Only used if
+    conformer generation fails.
+*   `_chem_comp_atom.pdbx_model_Cartn_z_ideal`: Ideal z coordinate. Only used if
+    conformer generation fails.
+*   `_chem_comp_bond.atom_id_1`: The ID of the first of the two atoms that
+    define the bond.
+*   `_chem_comp_bond.atom_id_2`: The ID of the second of the two atoms that
+    define the bond.
 
 ## Full Example
 
@@ -855,13 +959,12 @@ certain fields and the sequences are not biologically meaningful.
     }
   ],
   "bondedAtomPairs": [
-    [["A", 1, "CA"], ["B", 1, "CA"]],
     [["A", 1, "CA"], ["G", 1, "CHA"]],
-    [["J", 1, "O6"], ["J", 2, "C1"]]
+    [["I", 1, "O6"], ["I", 2, "C1"]]
   ],
   "userCCD": ...,
   "dialect": "alphafold3",
-  "version": 2
+  "version": 3
 }
 
 ```

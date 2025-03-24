@@ -49,7 +49,8 @@ def _get_protein_templates(
         filter_config=templates_config.filter_config,
     )
     logging.info(
-        'Getting protein templates took %.2f seconds for sequence %s',
+        'Getting %d protein templates took %.2f seconds for sequence %s',
+        protein_templates.num_hits,
         time.time() - templates_start_time,
         sequence,
     )
@@ -117,9 +118,12 @@ def _get_protein_msa_and_templates(
       msas=[uniprot_msa], deduplicate=False
   )
   logging.info(
-      'Deduplicating MSAs took %.2f seconds for sequence %s',
+      'Deduplicating MSAs took %.2f seconds for sequence %s, found %d unpaired'
+      ' sequences, %d paired sequences',
       time.time() - msa_dedupe_start_time,
       sequence,
+      unpaired_protein_msa.depth,
+      paired_protein_msa.depth,
   )
 
   protein_templates = _get_protein_templates(
@@ -160,17 +164,18 @@ def _get_rna_msa(
       run_config=rnacentral_msa_config,
       chain_poly_type=mmcif_names.RNA_CHAIN,
   )
-
-  logging.info(
-      'Getting RNA MSAs took %.2f seconds for sequence %s',
-      time.time() - rna_msa_start_time,
-      sequence,
-  )
-
-  return msa.Msa.from_multiple_msas(
+  rna_msa = msa.Msa.from_multiple_msas(
       msas=[rfam_msa, rnacentral_msa, nt_rna_msa],
       deduplicate=True,
   )
+  logging.info(
+      'Getting RNA MSAs took %.2f seconds for sequence %s, found %d unpaired'
+      ' sequences',
+      time.time() - rna_msa_start_time,
+      sequence,
+      rna_msa.depth,
+  )
+  return rna_msa
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -463,8 +468,10 @@ class DataPipeline:
       paired_msa = chain.paired_msa or empty_msa
       templates = chain.templates
 
-    return dataclasses.replace(
-        chain,
+    return folding_input.ProteinChain(
+        id=chain.id,
+        sequence=chain.sequence,
+        ptms=chain.ptms,
         unpaired_msa=unpaired_msa,
         paired_msa=paired_msa,
         templates=templates,
@@ -493,13 +500,18 @@ class DataPipeline:
           rfam_msa_config=self._rfam_msa_config,
           rnacentral_msa_config=self._rnacentral_msa_config,
       ).to_a3m()
-    return dataclasses.replace(chain, unpaired_msa=unpaired_msa)
+    return folding_input.RnaChain(
+        id=chain.id,
+        sequence=chain.sequence,
+        modifications=chain.modifications,
+        unpaired_msa=unpaired_msa,
+    )
 
   def process(self, fold_input: folding_input.Input) -> folding_input.Input:
     """Runs MSA and template tools and returns a new Input with the results."""
     processed_chains = []
     for chain in fold_input.chains:
-      print(f'Processing chain {chain.id}')
+      print(f'Running data pipeline for chain {chain.id}...')
       process_chain_start_time = time.time()
       match chain:
         case folding_input.ProteinChain():
@@ -509,7 +521,7 @@ class DataPipeline:
         case _:
           processed_chains.append(chain)
       print(
-          f'Processing chain {chain.id} took'
+          f'Running data pipeline for chain {chain.id} took'
           f' {time.time() - process_chain_start_time:.2f} seconds',
       )
 
